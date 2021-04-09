@@ -1853,6 +1853,45 @@ ngx_http_script_var_code(ngx_http_script_engine_t *e)
     e->sp++;
 }
 
+void
+ngx_http_script_if_operator_code(ngx_http_script_engine_t *e)
+{
+    ngx_http_script_if_operator_code_t  *code;
+    ngx_uint_t op;
+    ngx_http_variable_value_t  *val, *res;
+
+    code = (ngx_http_script_if_operator_code_t *) e->ip;
+    op = code->op;
+
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, e->request->connection->log, 0,
+                   "http script if operator %u", op);
+    e->sp--;
+    val = e->sp;
+    res = val;
+    res = e->sp - 1;
+
+    if ( op == ngx_http_script_if_and ) {
+        if ((val->len && (val->len != 1 || val->data[0] != '0')) && \
+            (res->len && (res->len != 1 || res->data[0] != '0'))) {
+            *res = ngx_http_variable_true_value;
+        } else {
+            *res = ngx_http_variable_null_value;
+        }
+    } else if ( op == ngx_http_script_if_or ) {
+        if ((val->len && (val->len != 1 || val->data[0] != '0')) || \
+            (res->len && (res->len != 1 || res->data[0] != '0'))) {
+            *res = ngx_http_variable_true_value;
+        } else {
+            *res = ngx_http_variable_null_value;
+        }
+    } else {
+        ngx_log_error(NGX_LOG_ERR, e->request->connection->log, 0,
+                "the operator %u isn't supported.", op);
+    }
+    e->ip += sizeof(ngx_http_script_if_operator_code_t);
+
+    return;
+}
 
 void
 ngx_http_script_nop_code(ngx_http_script_engine_t *e)
