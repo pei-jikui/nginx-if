@@ -642,51 +642,26 @@ ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     return NGX_CONF_OK;
 }
 
-
 static char *
-ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
+ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf, ngx_uint_t cur, ngx_uint_t last)
 {
     u_char                        *p;
     size_t                         len;
     ngx_str_t                     *value;
-    ngx_uint_t                     cur, last;
     ngx_regex_compile_t            rc;
     ngx_http_script_code_pt       *code;
     ngx_http_script_file_code_t   *fop;
     ngx_http_script_regex_code_t  *regex;
     u_char                         errstr[NGX_MAX_CONF_ERRSTR];
 
+    if (cur > last) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                "item begin index %u is larger than the end index %u",
+                cur, last);
+        return NGX_CONF_ERROR;
+    }
+
     value = cf->args->elts;
-    last = cf->args->nelts - 1;
-
-    if (value[1].len < 1 || value[1].data[0] != '(') {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                           "invalid condition \"%V\"", &value[1]);
-        return NGX_CONF_ERROR;
-    }
-
-    if (value[1].len == 1) {
-        cur = 2;
-
-    } else {
-        cur = 1;
-        value[1].len--;
-        value[1].data++;
-    }
-
-    if (value[last].len < 1 || value[last].data[value[last].len - 1] != ')') {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                           "invalid condition \"%V\"", &value[last]);
-        return NGX_CONF_ERROR;
-    }
-
-    if (value[last].len == 1) {
-        last--;
-
-    } else {
-        value[last].len--;
-        value[last].data[value[last].len] = '\0';
-    }
 
     len = value[cur].len;
     p = value[cur].data;
@@ -860,6 +835,114 @@ ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
                        "invalid condition \"%V\"", &value[cur]);
 
     return NGX_CONF_ERROR;
+}
+
+static ngx_int_t
+ngx_http_rewrite_if_logic_operator(ngx_str_t *value, ngx_uint_t *operator_type,
+    ngx_uint_t *operator_index, ngx_uint_t begin, ngx_uint_t last)
+{
+    ngx_uint_t index = begin;
+    ngx_int_t operator_num = 0;
+
+    if (value == NULL || operator_type == NULL || operator_index == NULL){
+        return 0;
+    }
+
+    *operator_index = 0;
+    while(index <= last){
+        if (value[index].len == 2) {
+            if (ngx_strncmp(value[index].data, "||", 2) == 0){
+                operator_num ++;
+                *operator_type = ngx_http_script_if_or;
+                *operator_index = index;
+            } else if (ngx_strncmp(value[index].data, "&&", 2) == 0){
+                operator_num ++;
+                *operator_type = ngx_http_script_if_and;
+                *operator_index = index;
+            }
+        }
+        index ++;
+    }
+
+    /*The operator could not be the first nor the last token.*/
+    if ( operator_num && (*operator_index <= begin || *operator_index >= last) ){
+        return -1;
+    }
+    return operator_num;
+}
+
+static char *
+ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
+{
+    char                               *rv;
+    ngx_str_t                          *value;
+    ngx_uint_t                         cur, last;
+    ngx_int_t                          operator_num;
+    ngx_uint_t                         operator_type;
+    ngx_uint_t                         operator_index;
+    ngx_http_script_if_operator_code_t *operator_code;
+
+    value = cf->args->elts;
+    last = cf->args->nelts - 1;
+
+    if (value[1].len < 1 || value[1].data[0] != '(') {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "invalid condition \"%V\"", &value[1]);
+        return NGX_CONF_ERROR;
+    }
+
+    if (value[1].len == 1) {
+        cur = 2;
+
+    } else {
+        cur = 1;
+        value[1].len--;
+        value[1].data++;
+    }
+
+    if (value[last].len < 1 || value[last].data[value[last].len - 1] != ')') {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "invalid condition \"%V\"", &value[last]);
+        return NGX_CONF_ERROR;
+    }
+
+    if (value[last].len == 1) {
+        last--;
+
+    } else {
+        value[last].len--;
+        value[last].data[value[last].len] = '\0';
+    }
+    /*check if "||' or "&&" occurs in the values*/
+    operator_num = ngx_http_rewrite_if_logic_operator(value, &operator_type,
+                        &operator_index, cur, last);
+
+    if (operator_num == 0) {
+        rv = ngx_http_rewrite_if_sub_condition(cf, lcf, cur, last);
+    } else if (operator_num == 1) {
+        ngx_conf_log_error(NGX_LOG_DEBUG, cf, 0,
+                           "find the logic operator %u at index %u.",
+                           operator_type, operator_index);
+        /*parse the two parts before and after the operator respectively.*/
+        rv = ngx_http_rewrite_if_sub_condition(cf, lcf, cur,
+                operator_index - 1);
+        if (rv == NGX_CONF_OK) {
+            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, operator_index + 1,
+                    last);
+        }
+        /*Both the two parts are ok then add the opeartor function.*/
+        if (rv == NGX_CONF_OK) {
+            operator_code = ngx_array_push_n(lcf->codes,
+                    sizeof(ngx_http_script_if_operator_code_t));
+            operator_code->code = ngx_http_script_if_operator_code;
+            operator_code->op = operator_type;
+        }
+    } else {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "unsupported logic operator number %d.", operator_num);
+        rv = NGX_CONF_ERROR;
+    }
+    return rv;
 }
 
 

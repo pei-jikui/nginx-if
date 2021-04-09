@@ -179,12 +179,21 @@ typedef enum {
     ngx_http_script_file_not_exec
 } ngx_http_script_file_op_e;
 
-
 typedef struct {
     ngx_http_script_code_pt     code;
     uintptr_t                   op;
 } ngx_http_script_file_code_t;
 
+
+typedef enum {
+    ngx_http_script_if_and = 0,
+    ngx_http_script_if_or
+} ngx_http_script_if_op_e;
+
+typedef struct {
+    ngx_http_script_code_pt    code;
+    uintptr_t                  op;
+} ngx_http_script_if_operator_code_t;
 
 typedef struct {
     ngx_http_script_code_pt     code;
@@ -262,6 +271,7 @@ void ngx_http_script_set_var_code(ngx_http_script_engine_t *e);
 void ngx_http_script_var_set_handler_code(ngx_http_script_engine_t *e);
 void ngx_http_script_var_code(ngx_http_script_engine_t *e);
 void ngx_http_script_nop_code(ngx_http_script_engine_t *e);
+void ngx_http_script_if_operator_code(ngx_http_script_engine_t *e);
 
 
 #endif /* _NGX_HTTP_SCRIPT_H_INCLUDED_ */
