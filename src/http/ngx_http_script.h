@@ -186,6 +186,7 @@ typedef struct {
 
 
 typedef enum {
+    ngx_http_script_if_invalid = -1,
     ngx_http_script_if_and = 0,
     ngx_http_script_if_or
 } ngx_http_script_if_op_e;
