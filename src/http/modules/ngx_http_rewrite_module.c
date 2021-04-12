@@ -51,7 +51,7 @@ static char * ngx_http_rewrite_find_if_logic_operator(ngx_str_t * value,
     ngx_uint_t begin, ngx_uint_t last,
     ngx_http_rewrite_if_operator_t *operator);
 static char *
-ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
+ngx_http_rewrite_if_logic_item(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
     ngx_uint_t cur, ngx_uint_t last);
 
 
@@ -657,7 +657,7 @@ ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 }
 
 static char *
-ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
+ngx_http_rewrite_if_logic_item(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
     ngx_uint_t cur, ngx_uint_t last)
 {
     u_char                        *p;
@@ -973,8 +973,8 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
         if (value[index].len == 1) {
             index--;
         } else {
+            value[index].data[value[index].len] = '\0';
             value[index].len--;
-            value[index].data[value[last].len] = '\0';
         }
         /*The matching bracket is at the end of the tokens*/
         rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, index);
@@ -1030,7 +1030,7 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
 
         /*no any opeators anymore*/
         if (operator.op_type == ngx_http_script_if_invalid){
-            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, last);
+            rv = ngx_http_rewrite_if_logic_item(cf, lcf, begin, last);
             if (rv != NGX_CONF_OK) {
                 ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                         "internal if logic subcondition parsing error.");
@@ -1039,14 +1039,14 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
 
         } else {
             /*find the operator*/
-            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, operator.op_index - 1);
+            rv = ngx_http_rewrite_if_logic_item(cf, lcf, begin, operator.op_index - 1);
             if (rv != NGX_CONF_OK) {
                 ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                         "internal if logic subcondition parsing error.");
                 return rv;
             }
             begin = operator.op_index + 1;
-            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, last);
+            rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, last);
             if (rv != NGX_CONF_OK) {
                 ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                         "internal if logic subcondition parsing error.");
@@ -1061,16 +1061,13 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
         }
 
     }
-  
+
     return rv;
 }
 
 static char *
-ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
-        ngx_http_rewrite_loc_conf_t *lcf,
-        ngx_str_t *value, ngx_uint_t begin, ngx_uint_t last)
+ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
 {
-
     char                               *rv;
     ngx_str_t                          *value;
     ngx_uint_t                         begin, last;
@@ -1109,7 +1106,7 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
     }
 
     rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, last);
-    
+
     return rv;
 }
 
