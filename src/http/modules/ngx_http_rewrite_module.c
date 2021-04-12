@@ -37,14 +37,22 @@ static char *ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
 static char * ngx_http_rewrite_if_condition(ngx_conf_t *cf,
     ngx_http_rewrite_loc_conf_t *lcf);
-static char * ngx_http_rewrite_if_logic_operator(ngx_str_t *value,
-    ngx_array_t *operators, ngx_uint_t begin, ngx_uint_t last);
+
 static char *ngx_http_rewrite_variable(ngx_conf_t *cf,
     ngx_http_rewrite_loc_conf_t *lcf, ngx_str_t *value);
 static char *ngx_http_rewrite_set(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
 static char * ngx_http_rewrite_value(ngx_conf_t *cf,
     ngx_http_rewrite_loc_conf_t *lcf, ngx_str_t *value);
+static char * ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
+    ngx_http_rewrite_loc_conf_t *lcf,
+    ngx_str_t *value, ngx_uint_t begin, ngx_uint_t last);
+static char * ngx_http_rewrite_find_if_logic_operator(ngx_str_t * value,
+    ngx_uint_t begin, ngx_uint_t last,
+    ngx_http_rewrite_if_operator_t *operator);
+static char *
+ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
+    ngx_uint_t cur, ngx_uint_t last);
 
 
 static ngx_command_t  ngx_http_rewrite_commands[] = {
@@ -649,7 +657,8 @@ ngx_http_rewrite_if(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 }
 
 static char *
-ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf, ngx_uint_t cur, ngx_uint_t last)
+ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
+    ngx_uint_t cur, ngx_uint_t last)
 {
     u_char                        *p;
     size_t                         len;
@@ -842,6 +851,7 @@ ngx_http_rewrite_if_sub_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *l
 
     return NGX_CONF_ERROR;
 }
+
 static ngx_http_script_if_op_e
 ngx_http_rewrite_if_check_operator(ngx_str_t *value)
 {
@@ -859,74 +869,224 @@ ngx_http_rewrite_if_check_operator(ngx_str_t *value)
 }
 
 static char *
-ngx_http_rewrite_if_logic_operator(ngx_str_t *value, ngx_array_t *operators,
-    ngx_uint_t begin, ngx_uint_t last)
+ngx_http_rewrite_find_if_logic_operator(ngx_str_t * value, ngx_uint_t begin,
+       ngx_uint_t last, ngx_http_rewrite_if_operator_t *operator)
 {
-    ngx_uint_t index = begin;
-    ngx_http_rewrite_if_operator_t * item = NULL;
-    ngx_uint_t pre_index = begin;
-    ngx_http_script_if_op_e op_type;
+    ngx_http_script_if_op_e op_type =  ngx_http_script_if_invalid;
 
-    if (value == NULL || operators == NULL){
+    if (value == NULL || begin > last || operator == NULL) {
         return NGX_CONF_ERROR;
     }
 
-    /*Parse the if condition tokens*/
-    while(index <= last){
-        op_type = ngx_http_rewrite_if_check_operator(&value[index]);
+    operator->op_type = op_type;
+    operator->op_index = 0;
+    while (begin <= last) {
+        op_type = ngx_http_rewrite_if_check_operator(&value[begin]);
         if (op_type != ngx_http_script_if_invalid) {
-            item = ngx_array_push(operators);
-            if (item == NULL) {
-                return NGX_CONF_ERROR;
-            }
-
-            /*Check the validation of the experssion.
-            * That is, 1) the first couldn't be the logic operator
-            * 2) the last couldn't be the logic operator.
-            * 3) two logic operators couldn't be adjacent.*/
-            if (index ==  (pre_index + 1) || index == begin || index == last) {
-                return NGX_CONF_ERROR;
-            }
-            pre_index = index;
-            item->op_type  = op_type;
-            item->op_index = index;
+            operator->op_type = op_type;
+            operator->op_index = begin;
+            return NGX_CONF_OK;
         }
-        index ++;
+        begin ++;
     }
-
     return NGX_CONF_OK;
 }
 
+static char *
+ngx_http_rewrite_if_match_bracket(ngx_str_t *value, ngx_uint_t begin,
+        ngx_uint_t last, ngx_uint_t *index)
+{
+    /*When we run into this logic, the first charactore
+     * of the begin must be (
+     * which is guarante before calling this function.*/
+
+    /*The logic is quit simple, when find  a ( then the score
+     * increases by 1 and decreases by 1 if found a ). Will return
+     * if the score is zero which means the ( and ) is matching.
+     */
+
+    ngx_uint_t match_score = 1;
+    ngx_uint_t len = 0;
+    u_char * token_item = NULL;
+
+    if (value == NULL || begin > last || index == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    /*skip the first one which is a (*/
+    len =  value[begin].len - 1;
+    token_item = value[begin].data + 1;
+    while(begin <= last) {
+        while(len) {
+            if (*token_item == '(') {
+                match_score++;
+            } else if (*token_item == ')') {
+                match_score--;
+            }
+            len--;
+            token_item++;
+        }
+
+        /*Find the mathing*/
+        if (match_score ==0 ) {
+            *index = begin;
+            /*The one in begin +1 must be operator*/
+            return NGX_CONF_OK;
+        }
+
+        begin++;
+        /*try with next one.*/
+        len =  value[begin].len;
+        token_item = value[begin].data;
+    }
+    return NGX_CONF_ERROR;
+}
+
+static char *
+ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
+        ngx_http_rewrite_loc_conf_t *lcf,
+        ngx_str_t *value, ngx_uint_t begin, ngx_uint_t last)
+{
+    ngx_uint_t index,ori_index;
+    ngx_http_rewrite_if_operator_t operator = {};
+    char * rv = NGX_CONF_OK;
+    ngx_http_script_if_op_e op_type =  ngx_http_script_if_invalid;
+    ngx_http_script_if_operator_code_t *operator_code;
+
+    /*find the matching )*/
+    if (value[begin].data[0] == '(') {
+        rv = ngx_http_rewrite_if_match_bracket(value, begin, last, &index);
+        if (rv != NGX_CONF_OK) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                    "find match bracket error.");
+            return rv;
+        }
+        ori_index = index;
+        if (value[begin].len == 1) {
+            begin++;
+        } else {
+            value[begin].len--;
+            value[begin].data++;
+        }
+        if (value[index].len == 1) {
+            index--;
+        } else {
+            value[index].len--;
+            value[index].data[value[last].len] = '\0';
+        }
+        /*The matching bracket is at the end of the tokens*/
+        rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, index);
+        /*if op_type has validate value, then add the opcode*/
+        if (rv != NGX_CONF_OK) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                    "find parse if condition error.");
+            return rv;
+        }
+
+        index = ori_index;
+        if (index == last) {
+            return rv;
+        } else if (index < last - 2){
+            /*still have some tokens left.*/
+            /*The first one after index must be operator*/
+            op_type = ngx_http_rewrite_if_check_operator(&value[index + 1]);
+            if (op_type == ngx_http_script_if_invalid) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "two subconditions are adjacent without logic operator.");
+                return NGX_CONF_ERROR;
+            }
+            begin = index + 2;
+            rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, last);
+            if (rv != NGX_CONF_OK) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "find parse if condition error.");
+                return rv;
+            }
+            operator.op_type = op_type;
+            operator.op_index = index;
+            /*add the operator operation here.*/
+            operator_code = ngx_array_push_n(lcf->codes,
+                    sizeof(ngx_http_script_if_operator_code_t));
+            operator_code->code = ngx_http_script_if_operator_code;
+            operator_code->op = op_type;
+            op_type = operator.op_type;
+            return rv;
+        } else {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                    "if conditions parsing error.");
+            return NGX_CONF_ERROR;
+        }
+    } else {
+        /*Find the index of the operator*/
+        rv = ngx_http_rewrite_find_if_logic_operator(value, begin,
+                last, &operator);
+        if (rv != NGX_CONF_OK) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                    "internal if logic operator finding error.");
+            return rv;
+        }
+
+        /*no any opeators anymore*/
+        if (operator.op_type == ngx_http_script_if_invalid){
+            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, last);
+            if (rv != NGX_CONF_OK) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "internal if logic subcondition parsing error.");
+            }
+            return rv;
+
+        } else {
+            /*find the operator*/
+            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, operator.op_index - 1);
+            if (rv != NGX_CONF_OK) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "internal if logic subcondition parsing error.");
+                return rv;
+            }
+            begin = operator.op_index + 1;
+            rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, last);
+            if (rv != NGX_CONF_OK) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "internal if logic subcondition parsing error.");
+                return rv;
+            }
+            /*add the operator operation here.*/
+            operator_code = ngx_array_push_n(lcf->codes,
+                    sizeof(ngx_http_script_if_operator_code_t));
+            operator_code->code = ngx_http_script_if_operator_code;
+            operator_code->op = operator.op_type;
+            return rv;
+        }
+    }
+
+    return rv;
+}
 static char *
 ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
 {
     char                               *rv;
     ngx_str_t                          *value;
     ngx_uint_t                         begin, last;
-    ngx_uint_t                         operator_num;
-    ngx_uint_t                         i;
-    ngx_http_script_if_operator_code_t *operator_code;
-    ngx_array_t                        *operators;
-    ngx_http_rewrite_if_operator_t     *operator;
 
     value = cf->args->elts;
     last = cf->args->nelts - 1;
+    begin = 1;
 
-    if (value[1].len < 1 || value[1].data[0] != '(') {
+    if (value[begin].len < 1 || value[begin].data[0] != '(') {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                           "invalid condition \"%V\"", &value[1]);
+                           "invalid condition \"%V\"", &value[begin]);
         return NGX_CONF_ERROR;
     }
 
     if (value[1].len == 1) {
         begin = 2;
-
     } else {
         begin = 1;
         value[1].len--;
         value[1].data++;
     }
 
+    /*The last one must be )*/
     if (value[last].len < 1 || value[last].data[value[last].len - 1] != ')') {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                            "invalid condition \"%V\"", &value[last]);
@@ -935,69 +1095,12 @@ ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
 
     if (value[last].len == 1) {
         last--;
-
     } else {
         value[last].len--;
         value[last].data[value[last].len] = '\0';
     }
-    /*check if "||' or "&&" occurs in the values*/
-    operators = ngx_array_create(cf->pool, 5,
-            sizeof(ngx_http_rewrite_if_operator_t));
-    if (operators == NULL) {
-        return NGX_CONF_ERROR;
-    }
 
-    rv = ngx_http_rewrite_if_logic_operator(value, operators, begin, last);
-
-    if (rv != NGX_CONF_OK) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                "syntax of the if logic condition is wrong.");
-        return rv;
-    }
-
-    operator_num = operators->nelts;
-    /*We only support up to 5 logic operators at one if conditions*/
-    if (operator_num > 5) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                "More than 5 logic operators are defined.");
-        return NGX_CONF_ERROR;
-    }
-
-    /*go through the operators array to parse the conditions*/
-    if (operator_num == 0) {
-        rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin, last);
-    } else {
-        /*multiple logic operators are found*/
-        operator = operators->elts;
-        ngx_conf_log_error(NGX_LOG_DEBUG, cf, 0,
-                           "find the %u logic operators.", operator_num);
-        /*parse the two parts before and after the operator respectively.*/
-        rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin,
-                operator[0].op_index - 1);
-        begin = operator[0].op_index + 1;
-
-        if (rv != NGX_CONF_OK) {
-            return rv;
-        }
-        for (i = 0; i < operator_num && rv == NGX_CONF_OK; i ++) {
-            /*last operator*/
-            if ( i == (operator_num -1)) {
-                rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin,
-                        last);
-            } else {
-                rv = ngx_http_rewrite_if_sub_condition(cf, lcf, begin,
-                        operator[i+1].op_index -1);
-                begin = operator[i+1].op_index +1;
-            }
-
-            if (rv == NGX_CONF_OK) {
-                operator_code = ngx_array_push_n(lcf->codes,
-                        sizeof(ngx_http_script_if_operator_code_t));
-                operator_code->code = ngx_http_script_if_operator_code;
-                operator_code->op = operator[i].op_type;
-            }
-        }
-    }
+    rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, last);
     return rv;
 }
 
