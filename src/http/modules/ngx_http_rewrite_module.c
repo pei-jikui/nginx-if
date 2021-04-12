@@ -929,6 +929,7 @@ ngx_http_rewrite_if_match_bracket(ngx_str_t *value, ngx_uint_t begin,
         }
 
 
+
         /*Find the mathing*/
         if (match_score ==0 ) {
             *index = begin;
@@ -1026,6 +1027,7 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                     "internal if logic operator finding error.");
             return rv;
+
         }
 
         /*no any opeators anymore*/
@@ -1066,8 +1068,11 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
 }
 
 static char *
-ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
+ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
+        ngx_http_rewrite_loc_conf_t *lcf,
+        ngx_str_t *value, ngx_uint_t begin, ngx_uint_t last)
 {
+
     char                               *rv;
     ngx_str_t                          *value;
     ngx_uint_t                         begin, last;
