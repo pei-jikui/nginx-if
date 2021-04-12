@@ -892,6 +892,7 @@ ngx_http_rewrite_find_if_logic_operator(ngx_str_t * value, ngx_uint_t begin,
     return NGX_CONF_OK;
 }
 
+
 static char *
 ngx_http_rewrite_if_match_bracket(ngx_str_t *value, ngx_uint_t begin,
         ngx_uint_t last, ngx_uint_t *index)
@@ -926,6 +927,7 @@ ngx_http_rewrite_if_match_bracket(ngx_str_t *value, ngx_uint_t begin,
             len--;
             token_item++;
         }
+
 
         /*Find the mathing*/
         if (match_score ==0 ) {
@@ -1057,13 +1059,18 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
             operator_code->op = operator.op_type;
             return rv;
         }
-    }
 
+    }
+  
     return rv;
 }
+
 static char *
-ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
+ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
+        ngx_http_rewrite_loc_conf_t *lcf,
+        ngx_str_t *value, ngx_uint_t begin, ngx_uint_t last)
 {
+
     char                               *rv;
     ngx_str_t                          *value;
     ngx_uint_t                         begin, last;
@@ -1077,6 +1084,7 @@ ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
                            "invalid condition \"%V\"", &value[begin]);
         return NGX_CONF_ERROR;
     }
+
 
     if (value[1].len == 1) {
         begin = 2;
@@ -1101,6 +1109,7 @@ ngx_http_rewrite_if_condition(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf)
     }
 
     rv = ngx_http_rewrite_parse_if_condition(cf, lcf, value, begin, last);
+    
     return rv;
 }
 
