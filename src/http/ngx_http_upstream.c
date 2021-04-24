@@ -6128,6 +6128,9 @@ ngx_http_upstream_bind_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
     ngx_http_complex_value_t            cv;
     ngx_http_upstream_local_t         **plocal, *local;
     ngx_http_compile_complex_value_t    ccv;
+    ngx_uint_t                          num;
+    ngx_uint_t                          index;
+    ngx_http_upstream_addr_item_t       *item;
 
     plocal = (ngx_http_upstream_local_t **) (p + cmd->offset);
 
@@ -6136,20 +6139,12 @@ ngx_http_upstream_bind_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
     }
 
     value = cf->args->elts;
+    num = cf->args->nelts;
+    index = 1;
 
-    if (cf->args->nelts == 2 && ngx_strcmp(value[1].data, "off") == 0) {
+    if (num == 2 && ngx_strcmp(value[1].data, "off") == 0) {
         *plocal = NULL;
         return NGX_CONF_OK;
-    }
-
-    ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
-
-    ccv.cf = cf;
-    ccv.value = &value[1];
-    ccv.complex_value = &cv;
-
-    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
-        return NGX_CONF_ERROR;
     }
 
     local = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_local_t));
@@ -6157,42 +6152,8 @@ ngx_http_upstream_bind_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
         return NGX_CONF_ERROR;
     }
 
-    *plocal = local;
-
-    if (cv.lengths) {
-        local->value = ngx_palloc(cf->pool, sizeof(ngx_http_complex_value_t));
-        if (local->value == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        *local->value = cv;
-
-    } else {
-        local->addr = ngx_palloc(cf->pool, sizeof(ngx_addr_t));
-        if (local->addr == NULL) {
-            return NGX_CONF_ERROR;
-        }
-
-        rc = ngx_parse_addr_port(cf->pool, local->addr, value[1].data,
-                                 value[1].len);
-
-        switch (rc) {
-        case NGX_OK:
-            local->addr->name = value[1];
-            break;
-
-        case NGX_DECLINED:
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                               "invalid address \"%V\"", &value[1]);
-            /* fall through */
-
-        default:
-            return NGX_CONF_ERROR;
-        }
-    }
-
-    if (cf->args->nelts > 2) {
-        if (ngx_strcmp(value[2].data, "transparent") == 0) {
+    if (num > 2) {
+        if (ngx_strcmp(value[num-1].data, "transparent") == 0) {
 #if (NGX_HAVE_TRANSPARENT_PROXY)
             ngx_core_conf_t  *ccf;
 
@@ -6206,10 +6167,64 @@ ngx_http_upstream_bind_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
                                "transparent proxying is not supported "
                                "on this platform, ignored");
 #endif
-        } else {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                               "invalid parameter \"%V\"", &value[2]);
+            num -= 1;
+        }
+    }
+
+    if (ngx_array_init(&local->address, cf->pool, 10,
+                sizeof(ngx_http_upstream_addr_item_t)) != NGX_OK) {
+        return NGX_CONF_ERROR;
+    }
+    local->order = 0;
+
+    while( index++ < num ) {
+        ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
+
+        ccv.cf = cf;
+        ccv.value = &value[index];
+        ccv.complex_value = &cv;
+
+        item = ngx_array_push(&local->address);
+        if (item == NULL){
             return NGX_CONF_ERROR;
+        }
+
+        if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+            return NGX_CONF_ERROR;
+        }
+
+        if (cv.lengths) {
+            item->value = (void*)ngx_palloc(cf->pool, sizeof(ngx_http_complex_value_t));
+            if (item->value == NULL) {
+                return NGX_CONF_ERROR;
+            }
+
+            *((ngx_http_complex_value_t *)item->value) = cv;
+            item->type = NGX_ADDR_VAR;
+
+        } else {
+            item->value = (void *)ngx_palloc(cf->pool, sizeof(ngx_addr_t));
+            if (item->value == NULL) {
+                return NGX_CONF_ERROR;
+            }
+
+            rc = ngx_parse_addr_port(cf->pool, (ngx_addr_t *)item->value, value[index].data,
+                    value[index].len);
+
+            switch (rc) {
+                case NGX_OK:
+                    ((ngx_addr_t *)(item->value))->name = value[index];
+                    break;
+
+                case NGX_DECLINED:
+                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                            "invalid address \"%V\"", &value[index]);
+                    /* fall through */
+
+                default:
+                    return NGX_CONF_ERROR;
+            }
+            item->type = NGX_ADDR_IP;
         }
     }
 
@@ -6221,58 +6236,79 @@ static ngx_int_t
 ngx_http_upstream_set_local(ngx_http_request_t *r, ngx_http_upstream_t *u,
     ngx_http_upstream_local_t *local)
 {
+    /*TODO find the right local address*/
     ngx_int_t    rc;
     ngx_str_t    val;
     ngx_addr_t  *addr;
+    ngx_uint_t  num;
+    ngx_array_t *address;
+    ngx_http_upstream_addr_item_t       *item;
 
     if (local == NULL) {
         u->peer.local = NULL;
         return NGX_OK;
     }
 
+    address = &local->address;
+    num = address->nelts;
+    item = address->elts;
 #if (NGX_HAVE_TRANSPARENT_PROXY)
     u->peer.transparent = local->transparent;
 #endif
-
-    if (local->value == NULL) {
-        u->peer.local = local->addr;
-        return NGX_OK;
-    }
-
-    if (ngx_http_complex_value(r, local->value, &val) != NGX_OK) {
-        return NGX_ERROR;
-    }
-
-    if (val.len == 0) {
-        return NGX_OK;
-    }
-
-    addr = ngx_palloc(r->pool, sizeof(ngx_addr_t));
-    if (addr == NULL) {
-        return NGX_ERROR;
-    }
-
-    rc = ngx_parse_addr_port(r->pool, addr, val.data, val.len);
-    if (rc == NGX_ERROR) {
-        return NGX_ERROR;
-    }
-
-    if (rc != NGX_OK) {
+    /*Get the right order of the local address.*/
+    if (local->order >= num) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "invalid local address \"%V\"", &val);
+                      "invalid order %u is large than total %u", local->order, num);
+        return NGX_ERROR;
+    }
+
+    item += local->order;
+
+    if (item->type == NGX_ADDR_VAR) {
+        if (ngx_http_complex_value(r, (ngx_http_complex_value_t *)item->value, &val)
+                != NGX_OK) {
+            return NGX_ERROR;
+        }
+
+        if (val.len == 0) {
+            return NGX_OK;
+        }
+
+
+        addr = ngx_palloc(r->pool, sizeof(ngx_addr_t));
+        if (addr == NULL) {
+            return NGX_ERROR;
+        }
+
+        rc = ngx_parse_addr_port(r->pool, addr, val.data, val.len);
+        if (rc == NGX_ERROR) {
+            return NGX_ERROR;
+        }
+
+        if (rc != NGX_OK) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "invalid local address \"%V\"", &val);
+            return NGX_OK;
+        }
+
+        addr->name = val;
+        u->peer.local = addr;
+    } else if( item->type == NGX_ADDR_IP) {
+        u->peer.local = (ngx_addr_t *)item->value;
+    } else {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                "invalid ddress type %u", item->type);
         return NGX_OK;
     }
 
-    addr->name = val;
-    u->peer.local = addr;
-
+    local->order++;
     return NGX_OK;
 }
 
 
-char *
+    char *
 ngx_http_upstream_param_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
-    void *conf)
+        void *conf)
 {
     char  *p = conf;
 

@@ -136,13 +136,25 @@ struct ngx_http_upstream_srv_conf_s {
 #endif
 };
 
+typedef struct {
+    void         *value;
+    /*0 means the value is type of ngx_addr_t which is ip address.
+     *1 means the vlaue is type of ngx_http_complex_value_t which is
+     *ngx_value_t*/
+#define NGX_ADDR_IP  0
+#define NGX_ADDR_VAR 1
+    ngx_uint_t    type:1;
+} ngx_http_upstream_addr_item_t;
 
 typedef struct {
     ngx_addr_t                      *addr;
     ngx_http_complex_value_t        *value;
+    /*The item of address could be ip address or value*/
+    ngx_array_t                     address;
 #if (NGX_HAVE_TRANSPARENT_PROXY)
     ngx_uint_t                       transparent; /* unsigned  transparent:1; */
 #endif
+    ngx_atomic_t                     order;
 } ngx_http_upstream_local_t;
 
 
