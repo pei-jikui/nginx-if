@@ -950,7 +950,7 @@ ngx_http_rewrite_parse_if_condition(ngx_conf_t *cf,
         ngx_str_t *value, ngx_uint_t begin, ngx_uint_t last)
 {
     ngx_uint_t index,ori_index;
-    ngx_http_rewrite_if_operator_t operator = {};
+    ngx_http_rewrite_if_operator_t operator = {0};
     char * rv = NGX_CONF_OK;
     ngx_http_script_if_op_e op_type =  ngx_http_script_if_invalid;
     ngx_http_script_if_operator_code_t *operator_code;
